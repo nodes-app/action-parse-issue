@@ -1,15 +1,136 @@
-name: Hello
-description: Say hello
+name: Parse Issue
+description: Parse issue to JSON format based on a template
 branding:
   icon: activity
   color: blue
 inputs:
-  foo:
-    description: Foo
+  issue-body:
+    description: Issue body
     required: true
+  template:
+    description: Issue template file name (e.g. example.com)
+    required: true
+outputs:
+  result:
+    description: Issue in JSON format
+    value: ${{ steps.parse.outputs.result }}
+  error:
+    description: Validation Error (empty if no error occurred)
+    value: ${{ steps.parse.outputs.error }}
+  
 runs:
   using: composite
   steps:
     - shell: bash
+      id: read-issue-template
+      env:
+        TEMPLATE: ${{ inputs.template }}
       run: |
-        echo 'Hello, World!'
+        template_body=$(cat ".github/ISSUE_TEMPLATE/$TEMPLATE")
+        echo "::set-output name=body::$template_body"
+
+    - shell: bash
+      id: parse
+      env:
+        ISSUE_BODY: ${{ inputs.issue-body }}
+        TEMPLATE: ${{ inputs.template }}
+      run: |
+        parse () {
+          local parsed='{}'
+          local delimiter="### "
+          # Remove comments from issue body (see https://stackoverflow.com/a/4056052)
+          local body=$(echo "$1" | sed -e :a -re 's/<!--.*?-->//g;/<!--/N;//ba')
+
+          local s=$body$delimiter
+          s=${s#*"$delimiter"} # skip first element because it is empty
+
+          local element headline name value required key
+          while [[ $s ]]; do
+            element=$(echo "${s%%"$delimiter"*}" | sed --expression 's/\r//')
+            s=${s#*"$delimiter"};
+            headline=$(echo "${element%%$'\n*'}" | xargs)
+            name=$(echo "$headline" | sed 's/\(.*\)\s\*/\1/' | xargs)
+            value=$(echo "${element##"$headline"}" | xargs)
+            required=$([ "${headline: -1}" = '*' ] && echo true || echo false)
+            key=$(echo "$name" | sed -e 's/\s/_/g' -e 's/[A-Z]/\L&/g')
+            parsed=$(
+              echo "$parsed" \
+              | jq \
+                --arg key "$key" \
+                --arg name "$name" \
+                --argjson required $required \
+                --arg value "$value" \
+                '.[$key] = { "name": $name, "required": $required, "value": $value }'
+            )
+          done
+
+          echo "$parsed"
+        }
+
+        validate_parsed_issue () {
+          local parsed_issue="$1"
+          local parsed_template="$2"
+          local error
+
+          # Verify that all expected sections exist
+          local expected_keys=$(echo "$parsed_template" | jq -r '. | keys[]')
+          local exists
+          for expected_key in $expected_keys; do
+            exists=$(echo "$parsed_issue" | jq "has(\"$expected_key\")")
+            if [ -z "$error" ] && ! $exists; then
+              local name=$(echo "$parsed_template" | jq -r ".$expected_key.name")
+              error="Expected section missing: \`$name\`."
+            fi
+          done
+
+          # Verify that no unexpected sections exist
+          local keys=$(echo "$parsed_issue" | jq -r '. | keys[]')
+          for key in $keys; do
+            expected=$(echo "$parsed_template" | jq "has(\"$key\")")
+            if [ -z "$error" ] && ! $expected; then
+              local name=$(echo "$parsed_issue" | jq -r ".$key.name")
+              error="Unexpected section found: \`$name\`."
+            fi
+          done
+
+          # Verify that required values are non-empty
+          local keys=$(echo "$parsed_issue" | jq -r '. | keys[]')
+          local required value
+          for key in $keys; do
+            required=$(echo "$parsed_template" | jq -r ".$key.required")
+            value=$(echo "$parsed_issue" | jq -r ".$key.value")
+            if [ -z "$error" ] && $required && [ -z $value ]; then
+              local name=$(echo "$parsed_template" | jq -r ".$key.name")
+              error="Missing required value: \`$name\`."
+            fi
+          done
+
+          echo "$error"
+        }
+
+        result () {
+          local parsed_issue="$1"
+          local config='{}'
+          local keys=$(echo "$parsed_issue" | jq -r '. | keys[]')
+
+          for key in $keys; do
+            value=$(echo "$parsed_issue" | jq -r ".$key.value")
+            config=$(echo "$config" | jq --arg key "$key" --arg value "$value" '.[$key] = $value')
+          done
+
+          # Escape multiline characters (see https://trstringer.com/github-actions-multiline-strings/)
+          config="${config//'%'/'%25'}"
+          config="${config//$'\n'/'%0A'}"
+          config="${config//$'\r'/'%0D'}"
+
+          echo "$config"
+        }
+
+        parsed_template=$(parse "$(cat ".github/ISSUE_TEMPLATE/$TEMPLATE")")
+        parsed_issue=$(parse "$ISSUE_BODY")
+          
+        error=$(validate_parsed_issue "$parsed_issue" "$parsed_template")
+        result=$(result "$parsed_issue")
+        
+        echo "::set-output name=error::$error"
+        echo "::set-output name=result::$result"
