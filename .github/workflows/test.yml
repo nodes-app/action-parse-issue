@@ -6,8 +6,29 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
-
-      - name: Test Action
+      
+      - name: Issue to JSON
+        id: issue-to-json
         uses: ./
         with:
-          foo: bar
+          issue-body: |
+            <!-- Required parameters are marked with an asterisk (*) -->
+            
+            ### Foo *
+            
+            Hello, World!
+            
+            ### Bar
+            
+            Hello, Universe!
+          template: example.md
+          
+      - name: Check Result
+        env:
+          RESULT: ${{ steps.issue-to-json.outputs.result }}
+        run: |
+          expected_result=$'{\n  "bar": "Hello, Universe!",\n  "foo": "Hello, World!"\n}'
+          if [ "$RESULT" != "$expected_result" ]; then
+            echo "Unexpected result: $RESULT"
+            exit 1
+          fi
