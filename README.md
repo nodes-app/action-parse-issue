@@ -1,13 +1,20 @@
-[![Gitpod ready-to-code](https://img.shields.io/badge/Gitpod-ready--to--code-908a85?logo=gitpod)](https://gitpod.io/#https://github.com/nodes-app/REPOSITORY_NAME)
+[![Gitpod ready-to-code](https://img.shields.io/badge/Gitpod-ready--to--code-908a85?logo=gitpod)](https://gitpod.io/#https://github.com/nodes-app/action-issue-to-json)
 
-# title
-
-This is a short description.
+# action-issue-to-json
 
 ## Usage
 
-* Create a repository based on this template
-* In `README.md`
-  * Fill in `REPOSITORY_NAME` in Gitpod badge
-  * Replace title and description
-  * Remove usage section (this)
+```yml
+- name: Parse Issue to JSON
+  uses: nodes-app/action-issue-to-json@v1
+  with:
+    issue-body: ${{ github.event.issue.body }}
+    template: example.md
+```
+
+### Outputs
+
+Name | Description
+--- | ---
+`result` | Issue in JSON format
+`error` | Validation Error (empty if no error occurred)
