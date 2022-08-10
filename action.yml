@@ -298,7 +298,7 @@ runs:
             '
         )
 
-        echo "::set-output name=expected-values::$(echo "$result" | jq '.expected_values')"
-        echo "::set-output name=received-values::$(echo "$result" | jq '.received_values')"
-        echo "::set-output name=values::$(echo "$result" | jq '.values')"
-        echo "::set-output name=problems::$(echo "$result" | jq '.problems')"
+        echo "::set-output name=expected-values::$(echo "$result" | jq -c '.expected_values')"
+        echo "::set-output name=received-values::$(echo "$result" | jq -c '.received_values')"
+        echo "::set-output name=values::$(echo "$result" | jq -c '.values')"
+        echo "::set-output name=problems::$(echo "$result" | jq -c '.problems')"
