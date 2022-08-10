@@ -24,16 +24,16 @@ inputs:
 outputs:
   expected-values:
     description: Expected values (from issue template)
-    value: steps.parse.outputs.expected-values
+    value: ${{ steps.parse.outputs.expected-values }}
   received-values: 
     description: Received values (from issue)
-    value: steps.parse.outputs.received-values
+    value: ${{ steps.parse.outputs.received-values }}
   values: 
     description: All key-value pairs
-    value: steps.parse.outputs.values
+    value: ${{ steps.parse.outputs.values }}
   problems:
     description: Problems with received values
-    value: steps.parse.outputs.problems
+    value: ${{ steps.parse.outputs.problems }}
 
 runs:
   using: composite
