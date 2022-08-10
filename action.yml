@@ -24,16 +24,16 @@ inputs:
 outputs:
   expected-values:
     description: Expected values (from issue template)
-    value: fromJSON(steps.parse.outputs.result).expected_values
+    value: ${{ fromJSON(steps.parse.outputs.result).expected_values }}
   received-values: 
     description: Received values (from issue)
-    value: fromJSON(steps.parse.outputs.result).received_values
+    value: ${{ fromJSON(steps.parse.outputs.result).received_values }}
   values: 
     description: All key-value pairs
-    value: fromJSON(steps.parse.outputs.result).values
+    value: ${{ fromJSON(steps.parse.outputs.result).values }}
   problems:
     description: Problems with received values
-    value: fromJSON(steps.parse.outputs.result).problems
+    value: ${{ fromJSON(steps.parse.outputs.result).problems }}
 
 runs:
   using: composite
