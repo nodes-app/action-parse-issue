@@ -4,133 +4,298 @@ branding:
   icon: activity
   color: blue
 inputs:
+  repository:
+    description: GitHub repository (e.g. nodes-app/example)
+    required: true
+    default: ${{ github.repository }}
   issue-body:
     description: Issue body
+    required: false
+  issue-number:
+    description: Issue number
+    required: false
+  issue-template:
+    description: Issue template file basename (e.g. example.md) 
     required: true
-  template:
-    description: Issue template file name (e.g. example.com)
+  heading-level:
+    description: Value heading level
     required: true
+    default: '3'
 outputs:
-  result:
-    description: Issue in JSON format
-    value: ${{ steps.parse.outputs.result }}
-  error:
-    description: Validation Error (empty if no error occurred)
-    value: ${{ steps.parse.outputs.error }}
-  
+  expected-values:
+    description: Expected values (from issue template)
+    value: fromJSON(steps.parse.outputs.result).expected_values
+  received-values: 
+    description: Received values (from issue)
+    value: fromJSON(steps.parse.outputs.result).received_values
+  values: 
+    description: All key-value pairs
+    value: fromJSON(steps.parse.outputs.result).values
+  problems:
+    description: Problems with received values
+    value: fromJSON(steps.parse.outputs.result).problems
+
 runs:
   using: composite
   steps:
-    - shell: bash
-      id: read-issue-template
-      env:
-        TEMPLATE: ${{ inputs.template }}
-      run: |
-        template_body=$(cat ".github/ISSUE_TEMPLATE/$TEMPLATE")
-        echo "::set-output name=body::$template_body"
-
+  
     - shell: bash
       id: parse
       env:
+        REPOSITORY: ${{ inputs.repository }}
         ISSUE_BODY: ${{ inputs.issue-body }}
-        TEMPLATE: ${{ inputs.template }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        ISSUE_TEMPLATE: ${{ inputs.issue-template }}
+        HEADING_LEVEL: ${{ inputs.heading-level }}
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
-        parse () {
-          local parsed='{}'
-          local delimiter="### "
-          # Remove comments from issue body (see https://stackoverflow.com/a/4056052)
-          local body=$(echo "$1" | sed -e :a -re 's/<!--.*?-->//g;/<!--/N;//ba')
+        if [[ -z "$ISSUE_BODY" ]]; then
+          if [[ -z "$ISSUE_NUMBER" ]]; then
+            echo 'must provide either issue-body or issue-number input'
+            exit 1
+          fi
+          ISSUE_BODY=$(
+            gh issue view \
+              "$ISSUE_NUMBER" \
+              --repo "$REPOSITORY" \
+              --json body \
+              --jq '.body'
+          )
+        fi
 
-          local s=$body$delimiter
-          s=${s#*"$delimiter"} # skip first element because it is empty
+        issue_template_content=$(
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/$REPOSITORY/contents/.github/ISSUE_TEMPLATE/$ISSUE_TEMPLATE" \
+            --jq '.content' \
+          | base64 -d
+        )
 
-          local element headline name value required key
-          while [[ $s ]]; do
-            element=$(echo "${s%%"$delimiter"*}" | sed --expression 's/\r//')
-            s=${s#*"$delimiter"};
-            headline=$(echo "${element%%$'\n*'}" | xargs)
-            name=$(echo "$headline" | sed 's/\(.*\)\s\*/\1/' | xargs)
-            value=$(echo "${element##"$headline"}" | xargs)
-            required=$([ "${headline: -1}" = '*' ] && echo true || echo false)
-            key=$(echo "$name" | sed -e 's/\s/_/g' -e 's/[A-Z]/\L&/g')
-            parsed=$(
-              echo "$parsed" \
-              | jq \
-                --arg key "$key" \
-                --arg name "$name" \
-                --argjson required $required \
-                --arg value "$value" \
-                '.[$key] = { "name": $name, "required": $required, "value": $value }'
-            )
-          done
+        result=$(
+          jq \
+            --null-input \
+            --argjson heading_level "$HEADING_LEVEL" \
+            --arg issue_template_content "$issue_template_content" \
+            --arg issue_body "$ISSUE_BODY" \
+            '
+            def toprimitivetype($type): (
+              if $type == "string" then (
+                .
+              ) elif $type == "int" then (
+                try (tonumber | floor)
+                 catch null
+              ) elif $type == "float" then (
+                try tonumber
+                catch null
+              ) elif $type == "boolean" then (
+                ascii_downcase as $raw_lower_case
+                | 
+                if any(["true", "yes", "y"][]; . == $raw_lower_case) then true
+                elif any(["false", "no", "n"][]; . == $raw_lower_case) then false
+                else null end
+              ) else null end
+            );
+            def totype($type): (
+              if ($type | endswith("array")) then (
+                split("\\n")
+                | map(toprimitivetype($type | sub("\\s*array$"; "")))
+              ) else (
+                toprimitivetype($type)
+              ) end
+            );
+            def extractname: (
+              capture("^(?<name>[[:word:][:space:]]+)\\s*\\*?\\s*(<!--([[:word:][:space:]]+)-->)?$")
+              | .name
+              | sub("^\\s*"; "")
+              | sub("\\s*$"; "")
+            );
+            def extractrawvalue($name; $heading_prefix): (
+              capture("\($heading_prefix)\\s*\($name).*\n(?<remaining_body>[[:print:][:space:]]+)")
+              | .remaining_body
+              | gsub("<!--.*-->"; "")
+              | sub("\($heading_prefix)([[:print:][:space:]]*)$"; "")
+              | sub("^\\s*"; "")
+              | sub("\\s*$"; "")
+            );
+            ([range(3) | "#"] | join("")) as $heading_prefix
+            | ["string", "int", "float", "boolean"] as $primitive_types
+            |
+            [
+              $issue_template_content
+              | split("\n")[]
+              | select(
+                  startswith($heading_prefix)
+              )
+              | sub("^\($heading_prefix)\\s*"; "")
+              | sub("\\s*$"; "")
+              | extractname as $name
+              | (
+                $name
+                | ascii_downcase
+                | gsub(" "; "_")
+              ) as $key
+              |
+              (
+                test("^([[:word:][:space:]]+)\\s*\\*\\s*(<!--([[:word:][:space:]]+)-->)?$")
+              ) as $required
+              |
+              (
+                if (
+                  test("^([[:word:][:space:]]+)\\s*\\*?\\s*<!--([[:word:][:space:]]+)-->$")
+                ) then (
+                  capture("^([[:word:][:space:]]+)\\s*\\*?\\s*<!--(?<type_comment>[[:word:][:space:]]+)-->$")
+                  | .type_comment
+                  | sub("^\\s*"; "")
+                  | sub("\\s*$"; "")
+                  | . as $raw_type
+                  | if (
+                      any($primitive_types[]; . == $raw_type)
+                      or any($primitive_types[]; . == ($raw_type | sub("\\s*array"; "")))
+                    ) then $raw_type else "string" end
+                ) else "string" end
+              ) as $type
+              |
+              (
+                $issue_template_content
+                | extractrawvalue($name; $heading_prefix)
+              ) as $raw_default_value
+              |
+              (
+                $raw_default_value
+                | totype($type)
+              ) as $default_value
+              |
+              {
+                "name": $name,
+                "key": $key,
+                "type": $type,
+                "required": $required,
+                "default_value": $default_value,
+                "raw_default_value": $raw_default_value
+              }
+            ] as $expected_values
+            |
+            [
+              $issue_body
+              | split("\n")[]
+              | select(
+                  startswith($heading_prefix)
+              )
+              | sub("^\($heading_prefix)\\s*"; "")
+              | sub("\\s*$"; "")
+              | extractname as $name
+              | (
+                $issue_body
+                | extractrawvalue($name; $heading_prefix)
+              ) as $raw_value
+              |
+              [
+                $expected_values[]
+                | select(.name == $name)
+              ][0] as $expected_value
+              | (
+                $expected_value != null
+              ) as $expected
+              | (
+                $expected_value.key
+              ) as $key
+              | (
+                $expected_value.type
+              ) as $type
+              | (
+                $expected_value.required
+              ) as $required
+              | (
+                $expected_value.default_value
+              ) as $default_value
+              | (
+                $raw_value
+                | if $expected then totype($type) else null end
+              ) as $value
+              |
+              {
+                "name": $name,
+                "raw_value": $raw_value,
+                "expected": $expected,
+                "key": $key,
+                "type": $type,
+                "required": $required,
+                "default_value": $default_value,
+                "value": $value
+              }
+            ] as $received_values
+            |
+            (
+              reduce $expected_values[] as $expected_value (
+                {};
+                .[$expected_value.key] = [
+                  $received_values[]
+                  | select(.key == $expected_value.key)
+                ][0].value
+              )
+            ) as $values
+            |
+            (
+              [
+                $expected_values[]
+                | select(
+                  .name as $name
+                  | any($received_values[]; .name == $name)
+                  | not
+                )
+                | .name
+              ] as $missing_value_names
+              |
+              [
+                $received_values[]
+                | select(
+                  .name as $name
+                  | any($expected_values[]; .name == $name)
+                  | not
+                )
+                | .name
+              ] as $superfluous_value_names
+              |
+              [
+                $expected_values[]
+                | select(
+                  .name as $name
+                  | .type as $type
+                  | .required
+                  and (
+                    any($missing_value_names[]; . == $name)
+                    | not
+                  )
+                  and (
+                    [
+                      $received_values[]
+                      | select(.name == $name)
+                    ][0].value as $value
+                    | 
+                    if $type == "string" then (
+                      $value == "" 
+                    ) else (
+                      $value == null
+                    ) end
+                  )
+                )
+                | .name
+              ] as $empty_required_value_names
+              |
+              {
+                "missing_value_names": $missing_value_names,
+                "superfluous_value_names": $superfluous_value_names,
+                "empty_required_value_names": $empty_required_value_names
+              }
+            ) as $problems
+            |
+            {
+              "expected_values": $expected_values,
+              "received_values": $received_values,
+              "values": $values,
+              "problems": $problems
+            }
+            '
+        )
 
-          echo "$parsed"
-        }
-
-        validate_parsed_issue () {
-          local parsed_issue="$1"
-          local parsed_template="$2"
-          local error
-
-          # Verify that all expected sections exist
-          local expected_keys=$(echo "$parsed_template" | jq -r '. | keys[]')
-          local exists
-          for expected_key in $expected_keys; do
-            exists=$(echo "$parsed_issue" | jq "has(\"$expected_key\")")
-            if [ -z "$error" ] && ! $exists; then
-              local name=$(echo "$parsed_template" | jq -r ".$expected_key.name")
-              error="Expected section missing: \`$name\`."
-            fi
-          done
-
-          # Verify that no unexpected sections exist
-          local keys=$(echo "$parsed_issue" | jq -r '. | keys[]')
-          for key in $keys; do
-            expected=$(echo "$parsed_template" | jq "has(\"$key\")")
-            if [ -z "$error" ] && ! $expected; then
-              local name=$(echo "$parsed_issue" | jq -r ".$key.name")
-              error="Unexpected section found: \`$name\`."
-            fi
-          done
-
-          # Verify that required values are non-empty
-          local keys=$(echo "$parsed_issue" | jq -r '. | keys[]')
-          local required value
-          for key in $keys; do
-            required=$(echo "$parsed_template" | jq -r ".$key.required")
-            value=$(echo "$parsed_issue" | jq -r ".$key.value")
-            if [ -z "$error" ] && $required && [ -z $value ]; then
-              local name=$(echo "$parsed_template" | jq -r ".$key.name")
-              error="Missing required value: \`$name\`."
-            fi
-          done
-
-          echo "$error"
-        }
-
-        result () {
-          local parsed_issue="$1"
-          local config='{}'
-          local keys=$(echo "$parsed_issue" | jq -r '. | keys[]')
-
-          for key in $keys; do
-            value=$(echo "$parsed_issue" | jq -r ".$key.value")
-            config=$(echo "$config" | jq --arg key "$key" --arg value "$value" '.[$key] = $value')
-          done
-
-          # Escape multiline characters (see https://trstringer.com/github-actions-multiline-strings/)
-          config="${config//'%'/'%25'}"
-          config="${config//$'\n'/'%0A'}"
-          config="${config//$'\r'/'%0D'}"
-
-          echo "$config"
-        }
-
-        parsed_template=$(parse "$(cat ".github/ISSUE_TEMPLATE/$TEMPLATE")")
-        parsed_issue=$(parse "$ISSUE_BODY")
-          
-        error=$(validate_parsed_issue "$parsed_issue" "$parsed_template")
-        result=$(result "$parsed_issue")
-        
-        echo "::set-output name=error::$error"
         echo "::set-output name=result::$result"

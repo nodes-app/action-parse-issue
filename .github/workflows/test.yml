@@ -21,14 +21,14 @@ jobs:
             ### Bar
             
             Hello, Universe!
-          template: example.md
+          issue-template: example.md
           
       - name: Check Result
         env:
-          RESULT: ${{ steps.issue-to-json.outputs.result }}
+          VALUES: ${{ steps.issue-to-json.outputs.values }}
         run: |
-          expected_result=$'{\n  "bar": "Hello, Universe!",\n  "foo": "Hello, World!"\n}'
-          if [ "$RESULT" != "$expected_result" ]; then
-            echo "Unexpected result: $RESULT"
+          expected_values=$'{\n  "bar": "Hello, Universe!",\n  "foo": "Hello, World!"\n}'
+          if [ "$VALUES" != "$expected_values" ]; then
+            echo "Unexpected result values: $VALUES"
             exit 1
           fi
