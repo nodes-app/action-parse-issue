@@ -24,16 +24,16 @@ inputs:
 outputs:
   expected-values:
     description: Expected values (from issue template)
-    value: ${{ (fromJSON(steps.parse.outputs.result)).expected_values }}
+    value: steps.parse.outputs.expected-values
   received-values: 
     description: Received values (from issue)
-    value: ${{ (fromJSON(steps.parse.outputs.result)).received_values }}
+    value: steps.parse.outputs.received-values
   values: 
     description: All key-value pairs
-    value: ${{ (fromJSON(steps.parse.outputs.result)).values }}
+    value: steps.parse.outputs.values
   problems:
     description: Problems with received values
-    value: ${{ (fromJSON(steps.parse.outputs.result)).problems }}
+    value: steps.parse.outputs.problems
 
 runs:
   using: composite
@@ -298,4 +298,7 @@ runs:
             '
         )
 
-        echo "::set-output name=result::$result"
+        echo "::set-output name=expected-values::$(echo "$result" | jq '.expected_values')"
+        echo "::set-output name=received-values::$(echo "$result" | jq '.received_values')"
+        echo "::set-output name=values::$(echo "$result" | jq '.values')"
+        echo "::set-output name=problems::$(echo "$result" | jq '.problems')"
