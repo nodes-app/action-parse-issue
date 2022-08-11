@@ -282,10 +282,21 @@ runs:
                 | .name
               ] as $empty_required_value_names
               |
+              (
+                if $missing_value_names | length > 0 then (
+                  "An expected value is missing: \"\($missing_value_names[0])\"."
+                ) elif $superfluous_value_names | length > 0 then (
+                  "An unexpected value was found: \"\($superfluous_value_names[0])\"."
+                ) elif $empty_required_value_names | length > 0 then (
+                  "A required value is empty: \"\($empty_required_value_names[0])\"."
+                ) else "" end
+              ) as $message
+              |
               {
                 "missing_value_names": $missing_value_names,
                 "superfluous_value_names": $superfluous_value_names,
-                "empty_required_value_names": $empty_required_value_names
+                "empty_required_value_names": $empty_required_value_names,
+                "message": $message
               }
             ) as $problems
             |
