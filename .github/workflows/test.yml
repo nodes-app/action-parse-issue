@@ -27,8 +27,11 @@ jobs:
         env:
           VALUES: ${{ steps.issue-to-json.outputs.values }}
         run: |
-          expected_values=$'{"foo":"Hello, World!","bar":"Hello, Universe!"}'
-          if [ "$VALUES" != "$expected_values" ]; then
+          values_match_expected=$(
+            echo "$VALUES" \
+            | jq '. == { "foo": "Hello, World!", "bar": "Hello, Universe!" }'
+          )
+          if ! "$values_match_expected"; then
             echo "Unexpected result values: $VALUES"
             exit 1
           fi
